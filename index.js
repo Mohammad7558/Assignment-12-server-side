@@ -3,7 +3,7 @@ const app = express();
 const cors = require('cors');
 const dotenv = require('dotenv');
 dotenv.config();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
 
 app.use(cors());
@@ -30,17 +30,18 @@ async function run() {
     // --------Db Collection start ---------//
     const db = client.db('Study-DB');
     const userCollections = db.collection('users');
+    const sessionCollections = db.collection('sessions');
     // --------Db Collection end ---------//
 
 
     //----------------------User related API start-------------------------//
 
     //------- upload user Data in Db -------//
-    app.post('/users', async(req, res) => {
+    app.post('/users', async (req, res) => {
       const email = req.body.email;
-      const existingUser = await userCollections.findOne({email});
-      if(existingUser){
-        return res.status(200).send({message: 'User already exists'})
+      const existingUser = await userCollections.findOne({ email });
+      if (existingUser) {
+        return res.status(200).send({ message: 'User already exists' })
       };
 
       const user = req.body;
@@ -49,21 +50,63 @@ async function run() {
     })
 
     //------- GET ROLE user Data in Db -------//
-    app.get('/users/:email/role', async(req, res) => {
+    app.get('/users/:email/role', async (req, res) => {
       const email = req.params.email;
-      if(!email){
-        return res.status(400).send({message: 'Email is required'})
+      if (!email) {
+        return res.status(400).send({ message: 'Email is required' })
       }
-      const user = await userCollections.findOne({email});
-      if(!user){
-        return res.status(404).send({message: 'User Not Found'})
+      const user = await userCollections.findOne({ email });
+      if (!user) {
+        return res.status(404).send({ message: 'User Not Found' })
       }
-      res.send({role: user.role || 'student'})
+      res.send({ role: user.role || 'student' })
     })
-    
 
-    //----------------------User related API start-------------------------//
-    
+    //-------- get all session ----------//
+    app.get('/sessions', async (req, res) => {
+      const result = await sessionCollections.find().toArray();
+      res.send(result)
+    })
+
+    //----------------------User related API end -------------------------//
+
+
+    //----------------------Tutor related API start -------------------------//
+
+    // ---------- add session API ----------//
+    app.post('/session', async (req, res) => {
+      const session = req.body;
+      const result = await sessionCollections.insertOne(session);
+      res.send(result);
+    })
+
+    // ---------- get 6 card session API ----------//
+    app.get('/sessions', async (req, res) => {
+      const now = new Date();
+      const result = await sessionCollections
+        .find({ status: 'approved' })
+        .sort({ registrationStartDate: 1 })
+        .limit(6)
+        .toArray();
+      res.send(result);
+    });
+
+    // ---------- show card details session API ----------//
+    app.get('/session/:id', async (req, res) => {
+      const id = req.params.id;
+      try {
+        const session = await sessionCollections.findOne({ _id: new ObjectId(id) });
+        if (!session) {
+          return res.status(404).send({ message: 'Session not found' });
+        }
+        res.send(session);
+      } catch (err) {
+        res.status(500).send({ message: 'Invalid ID format' });
+      }
+    });
+
+    //----------------------Tutor related API end -------------------------//
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
@@ -78,9 +121,9 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-    res.send('the last dance')
+  res.send('the last dance')
 })
 
 app.listen(port, () => {
-    console.log(`server is running on port ${port}`)
+  console.log(`server is running on port ${port}`)
 })
