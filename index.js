@@ -33,6 +33,8 @@ async function run() {
     // --------Db Collection end ---------//
 
 
+    //----------------------User related API start-------------------------//
+
     //------- upload user Data in Db -------//
     app.post('/users', async(req, res) => {
       const email = req.body.email;
@@ -45,6 +47,22 @@ async function run() {
       const result = await userCollections.insertOne(user);
       res.send(result);
     })
+
+    //------- GET ROLE user Data in Db -------//
+    app.get('/users/:email/role', async(req, res) => {
+      const email = req.params.email;
+      if(!email){
+        return res.status(400).send({message: 'Email is required'})
+      }
+      const user = await userCollections.findOne({email});
+      if(!user){
+        return res.status(404).send({message: 'User Not Found'})
+      }
+      res.send({role: user.role || 'student'})
+    })
+    
+
+    //----------------------User related API start-------------------------//
     
 
     // Send a ping to confirm a successful connection
