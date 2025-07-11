@@ -5,12 +5,8 @@ const dotenv = require('dotenv');
 dotenv.config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
-
 app.use(cors());
 app.use(express.json());
-
-
-
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@my-user.d2otqer.mongodb.net/?retryWrites=true&w=majority&appName=my-user`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -32,6 +28,9 @@ async function run() {
     const userCollections = db.collection('users');
     const sessionCollections = db.collection('sessions');
     const materialsCollections = db.collection('materials');
+    const bookedSessionsCollections = db.collection('booked-sessions');
+    const reviewCollections = db.collection('reviews');
+    const studentsCreateNotesCollections = db.collection('create-note');
     // --------Db Collection end ---------//
 
 
@@ -44,7 +43,6 @@ async function run() {
       if (existingUser) {
         return res.status(200).send({ message: 'User already exists' })
       };
-
       const user = req.body;
       const result = await userCollections.insertOne(user);
       res.send(result);
@@ -82,7 +80,7 @@ async function run() {
     })
 
     // ---------- get 6 card session API ----------//
-    app.get('/sessions', async (req, res) => {
+    app.get('/approved', async (req, res) => {
       const now = new Date();
       const result = await sessionCollections
         .find({ status: 'approved' })
@@ -91,6 +89,7 @@ async function run() {
         .toArray();
       res.send(result);
     });
+
 
     // ---------- show card details session API ----------//
     app.get('/session/:id', async (req, res) => {
@@ -109,11 +108,9 @@ async function run() {
     // get sessions data by email //
     app.get('/current-user', async (req, res) => {
       const email = req.query.email;
-
       if (!email) {
         return res.status(400).send({ message: "Email is required in query" });
       }
-
       try {
         const sessions = await sessionCollections.find({ tutorEmail: email }).toArray();
         res.send(sessions);
@@ -126,11 +123,9 @@ async function run() {
     // req again API//
     app.patch('/sessions/request-again/:id', async (req, res) => {
       const sessionId = req.params.id;
-
       if (!ObjectId.isValid(sessionId)) {
         return res.status(400).send({ error: 'Invalid session ID' });
       }
-
       try {
         const filter = { _id: new ObjectId(sessionId) };
         const session = await sessionCollections.findOne(filter);
@@ -140,13 +135,10 @@ async function run() {
         if (session.status !== 'rejected') {
           return res.status(400).send({ error: 'Only rejected sessions can request again' });
         }
-
         const updateDoc = {
           $set: { status: 'pending' },
         };
-
         const result = await sessionCollections.updateOne(filter, updateDoc);
-
         if (result.modifiedCount > 0) {
           res.send({ message: 'Session request sent again', modifiedCount: result.modifiedCount });
         } else {
@@ -177,12 +169,10 @@ async function run() {
       res.send(sessions);
     });
 
-
     // get all materials uploaded by a tutor 
     app.get('/materials', async (req, res) => {
       const email = req.query.email;
       if (!email) return res.status(400).send({ error: "Tutor email is required" });
-
       try {
         const materials = await materialsCollections.find({ tutorEmail: email }).toArray();
         res.send(materials);
@@ -195,9 +185,7 @@ async function run() {
     app.patch('/materials/:id', async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
-
       if (!ObjectId.isValid(id)) return res.status(400).send({ error: "Invalid ID" });
-
       try {
         const result = await materialsCollections.updateOne(
           { _id: new ObjectId(id) },
@@ -212,6 +200,7 @@ async function run() {
         res.status(500).send({ error: "Failed to update material" });
       }
     });
+
 
     // DELETE a material by ID
     app.delete('/materials/:id', async (req, res) => {
@@ -229,10 +218,213 @@ async function run() {
         res.status(500).send({ error: "Failed to delete material" });
       }
     });
-
-
-
     //----------------------Tutor related API end -------------------------//
+
+
+
+    //----------------------payment related API start -------------------------//
+
+
+    //----------------------payment related API end -------------------------//
+
+
+    //----------------------booked session related API start -------------------------//
+    app.post('/booked-sessions', async (req, res) => {
+      const bookedData = req.body;
+      const { sessionId, studentEmail } = bookedData;
+      const alreadyBooked = await bookedSessionsCollections.findOne({
+        sessionId,
+        studentEmail,
+      });
+
+      if (alreadyBooked) {
+        return res.status(409).send({ message: "Session already booked by this user" });
+      }
+      const result = await bookedSessionsCollections.insertOne(bookedData);
+      res.send(result);
+    });
+
+
+    // ✅ GET /booked-sessions/check
+    app.get('/booked-sessions/check', async (req, res) => {
+      const { sessionId, email } = req.query;
+      const exists = await bookedSessionsCollections.findOne({
+        sessionId,
+        studentEmail: email,
+      });
+      res.send({ booked: !!exists });
+    });
+
+    // review Session 
+    app.post('/reviews', async (req, res) => {
+      const review = req.body;
+
+      // Check if user already has a review for this session
+      const existingReview = await reviewCollections.findOne({
+        sessionId: review.sessionId,
+        studentEmail: review.studentEmail
+      });
+
+      if (existingReview) {
+        return res.status(400).send({
+          success: false,
+          message: "You have already reviewed this session. You can edit your existing review."
+        });
+      }
+
+      review.createdAt = new Date();
+      review.updatedAt = new Date();
+
+      const result = await reviewCollections.insertOne(review);
+      res.send({
+        success: true,
+        insertedId: result.insertedId
+      });
+    });
+
+    app.get('/reviews', async (req, res) => {
+      const sessionId = req.query.sessionId;
+      if (!sessionId) {
+        return res.status(400).send({ message: "sessionId is required" });
+      }
+
+      const reviews = await reviewCollections.find({ sessionId }).toArray();
+      res.send(reviews);
+    });
+
+    app.patch('/reviews/:id', async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid review ID" });
+      }
+
+      updatedData.updatedAt = new Date();
+
+      const result = await reviewCollections.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedData }
+      );
+
+      if (result.modifiedCount === 0) {
+        return res.status(404).send({ message: "Review not found" });
+      }
+
+      res.send({
+        success: true,
+        modifiedCount: result.modifiedCount
+      });
+    });
+
+
+    // get student booked all sessions
+    app.get('/booked-sessions/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: 'Invalid ID format' });
+        }
+
+        const session = await bookedSessionsCollections.findOne({ _id: new ObjectId(id) });
+        if (!session) {
+          return res.status(404).send({ message: 'Session not found' });
+        }
+        res.send(session);
+      } catch (error) {
+        console.error('Error fetching booked session:', error);
+        res.status(500).send({ message: 'Server error' });
+      }
+    });
+
+    // Get all booked sessions for a student
+    app.get('/booked-sessions', async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) {
+          return res.status(400).send({ message: 'Email is required' });
+        }
+
+        const sessions = await bookedSessionsCollections.find({ studentEmail: email }).toArray();
+        res.send(sessions);
+      } catch (error) {
+        console.error('Error fetching booked sessions:', error);
+        res.status(500).send({ message: 'Server error' });
+      }
+    });
+
+    //----------------------booked session related API end -------------------------//
+
+    //----------------------student related API Start STAR --------------------------//
+    app.post('/create-notes', async (req, res) => {
+      const notes = req.body;
+      const result = await studentsCreateNotesCollections.insertOne(notes);
+      res.send(result)
+    })
+
+    app.get('/notes', async (req, res) => {
+      try {
+        const email = req.query.email;
+        if (!email) {
+          return res.status(400).send({ message: 'Email is required' });
+        }
+
+        const notes = await studentsCreateNotesCollections.find({ email }).sort({ createdAt: -1 }).toArray();
+        res.send(notes);
+      } catch (error) {
+        console.error('Error fetching notes:', error);
+        res.status(500).send({ message: 'Failed to fetch notes' });
+      }
+    });
+
+    // Update a note
+    app.patch('/notes/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: 'Invalid note ID' });
+        }
+
+        const updatedData = req.body;
+        updatedData.updatedAt = new Date();
+
+        const result = await studentsCreateNotesCollections.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updatedData }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'Note not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'Note updated successfully' });
+      } catch (error) {
+        console.error('Error updating note:', error);
+        res.status(500).send({ message: 'Failed to update note' });
+      }
+    });
+
+    // Delete a note
+    app.delete('/notes/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: 'Invalid note ID' });
+        }
+
+        const result = await studentsCreateNotesCollections.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Note not found' });
+        }
+
+        res.send({ success: true, message: 'Note deleted successfully' });
+      } catch (error) {
+        console.error('Error deleting note:', error);
+        res.status(500).send({ message: 'Failed to delete note' });
+      }
+    });
+    //----------------------student related API Start END --------------------------//
 
 
     // Send a ping to confirm a successful connection
