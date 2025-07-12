@@ -170,11 +170,20 @@ async function run() {
     });
 
     // get all materials uploaded by a tutor 
+    // Updated GET /materials endpoint
     app.get('/materials', async (req, res) => {
-      const email = req.query.email;
-      if (!email) return res.status(400).send({ error: "Tutor email is required" });
+      const { sessionId, email } = req.query;
+
+      if (!sessionId && !email) {
+        return res.status(400).send({ error: "Either sessionId or tutor email is required" });
+      }
+
       try {
-        const materials = await materialsCollections.find({ tutorEmail: email }).toArray();
+        const query = {};
+        if (sessionId) query.sessionId = sessionId;
+        if (email) query.tutorEmail = email;
+
+        const materials = await materialsCollections.find(query).toArray();
         res.send(materials);
       } catch (error) {
         res.status(500).send({ error: "Failed to fetch materials" });
@@ -424,6 +433,9 @@ async function run() {
         res.status(500).send({ message: 'Failed to delete note' });
       }
     });
+
+    // view materials for student they booked sessions
+
     //----------------------student related API Start END --------------------------//
 
 
