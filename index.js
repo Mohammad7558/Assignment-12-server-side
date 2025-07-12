@@ -436,7 +436,247 @@ async function run() {
 
     // view materials for student they booked sessions
 
-    //----------------------student related API Start END --------------------------//
+    //----------------------student related API END --------------------------//
+
+
+
+
+    //----------------------Admin related API Start END --------------------------//
+
+    // get all users
+    app.get('/all-users', async (req, res) => {
+      const result = await userCollections.find().toArray();
+      res.send(result)
+    })
+
+    app.get('/search-users', async (req, res) => {
+      const { query } = req.query;
+
+      try {
+        const users = await userCollections.find({
+          $or: [
+            { name: { $regex: query, $options: 'i' } },
+            { email: { $regex: query, $options: 'i' } }
+          ]
+        }).toArray();
+
+        res.send(users);
+      } catch (error) {
+        res.status(500).send({ message: 'Error searching users' });
+      }
+    });
+
+    // Update user role
+    // Update this endpoint in your backend (server.js)
+    app.patch('/update-user-role/:id', async (req, res) => {
+      const { id } = req.params;
+      const { role, currentUserEmail } = req.body; // Add current user email
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid user ID' });
+      }
+
+      try {
+        // Get the user being updated
+        const userToUpdate = await userCollections.findOne({ _id: new ObjectId(id) });
+
+        // Check if admin is trying to change their own role
+        if (userToUpdate.email === currentUserEmail && role !== 'admin') {
+          return res.status(403).send({
+            message: 'You cannot remove your own admin privileges'
+          });
+        }
+
+        const result = await userCollections.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'User not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'User role updated successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error updating user role' });
+      }
+    });
+
+
+    app.get('/admin/sessions', async (req, res) => {
+      try {
+        const sessions = await sessionCollections.find().toArray();
+        res.send(sessions);
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching sessions' });
+      }
+    });
+
+    app.patch('/admin/sessions/:id/approve', async (req, res) => {
+      const { id } = req.params;
+      const { sessionType, price } = req.body;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid session ID' });
+      }
+
+      try {
+        const updateDoc = {
+          $set: {
+            status: 'approved',
+            sessionType,
+            price: sessionType === 'free' ? 0 : price
+          }
+        };
+
+        const result = await sessionCollections.updateOne(
+          { _id: new ObjectId(id) },
+          updateDoc
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'Session not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'Session approved successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error approving session' });
+      }
+    });
+
+    app.patch('/admin/sessions/:id/reject', async (req, res) => {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid session ID' });
+      }
+
+      try {
+        const result = await sessionCollections.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: 'rejected' } }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'Session not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'Session rejected successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error rejecting session' });
+      }
+    });
+
+    // Update session
+    app.patch('/admin/sessions/:id/update', async (req, res) => {
+      const { id } = req.params;
+      const updateData = req.body;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid session ID' });
+      }
+
+      try {
+        const result = await sessionCollections.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'Session not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'Session updated successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error updating session' });
+      }
+    });
+
+    // Delete session
+    app.delete('/admin/sessions/:id', async (req, res) => {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid session ID' });
+      }
+
+      try {
+        const result = await sessionCollections.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Session not found' });
+        }
+
+        res.send({ success: true, message: 'Session deleted successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error deleting session' });
+      }
+    });
+
+    // Reject session with reason
+    app.patch('/admin/sessions/:id/reject', async (req, res) => {
+      const { id } = req.params;
+      const { rejectionReason, feedback } = req.body;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid session ID' });
+      }
+
+      try {
+        const result = await sessionCollections.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: 'rejected',
+              rejectionReason,
+              feedback
+            }
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({ message: 'Session not found or no changes made' });
+        }
+
+        res.send({ success: true, message: 'Session rejected successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error rejecting session' });
+      }
+    });
+
+
+    // Get all materials (admin view)
+    app.get('/admin/materials', async (req, res) => {
+      try {
+        const materials = await materialsCollections.find().toArray();
+        res.send(materials);
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching materials' });
+      }
+    });
+
+    // Delete material
+    app.delete('/admin/materials/:id', async (req, res) => {
+      const { id } = req.params;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: 'Invalid material ID' });
+      }
+
+      try {
+        const result = await materialsCollections.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ message: 'Material not found' });
+        }
+
+        res.send({ success: true, message: 'Material deleted successfully' });
+      } catch (error) {
+        res.status(500).send({ message: 'Error deleting material' });
+      }
+    });
+
+    //----------------------Admin related API END --------------------------//
 
 
     // Send a ping to confirm a successful connection
