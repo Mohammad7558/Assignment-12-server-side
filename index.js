@@ -238,9 +238,18 @@ async function run() {
 
 
     //----------------------booked session related API start -------------------------//
+    // In your server.js, update the booked-sessions endpoint
     app.post('/booked-sessions', async (req, res) => {
       const bookedData = req.body;
       const { sessionId, studentEmail } = bookedData;
+
+      // Get the session details to include class dates
+      const session = await sessionCollections.findOne({ _id: new ObjectId(sessionId) });
+
+      if (!session) {
+        return res.status(404).send({ message: "Session not found" });
+      }
+
       const alreadyBooked = await bookedSessionsCollections.findOne({
         sessionId,
         studentEmail,
@@ -249,7 +258,16 @@ async function run() {
       if (alreadyBooked) {
         return res.status(409).send({ message: "Session already booked by this user" });
       }
-      const result = await bookedSessionsCollections.insertOne(bookedData);
+
+      // Include class dates from the session
+      const completeBookedData = {
+        ...bookedData,
+        classStartDate: session.classStartDate,
+        classEndDate: session.classEndDate,
+        duration: session.duration
+      };
+
+      const result = await bookedSessionsCollections.insertOne(completeBookedData);
       res.send(result);
     });
 
@@ -544,25 +562,50 @@ async function run() {
       }
     });
 
+
+
+    //// |
+
     app.patch('/admin/sessions/:id/reject', async (req, res) => {
       const { id } = req.params;
+      const { rejectionReason, feedback } = req.body;
 
       if (!ObjectId.isValid(id)) {
         return res.status(400).send({ message: 'Invalid session ID' });
       }
 
+      if (!rejectionReason) {
+        return res.status(400).send({ message: 'Rejection reason is required' });
+      }
+
       try {
+        const updateData = {
+          status: 'rejected',
+          rejectionReason,
+          updatedAt: new Date()
+        };
+
+        // Only add feedback if provided
+        if (feedback) {
+          updateData.feedback = feedback;
+        }
+
         const result = await sessionCollections.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { status: 'rejected' } }
+          { $set: updateData }
         );
 
         if (result.modifiedCount === 0) {
           return res.status(404).send({ message: 'Session not found or no changes made' });
         }
 
-        res.send({ success: true, message: 'Session rejected successfully' });
+        res.send({
+          success: true,
+          message: 'Session rejected successfully',
+          updatedSession: await sessionCollections.findOne({ _id: new ObjectId(id) })
+        });
       } catch (error) {
+        console.error('Error rejecting session:', error);
         res.status(500).send({ message: 'Error rejecting session' });
       }
     });
@@ -673,6 +716,36 @@ async function run() {
         res.send({ success: true, message: 'Material deleted successfully' });
       } catch (error) {
         res.status(500).send({ message: 'Error deleting material' });
+      }
+    });
+
+    // Update the tutor-rejected-sessions endpoint
+    app.get('/tutor-rejected-sessions', async (req, res) => {
+      const email = req.query.email;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
+
+      try {
+        const sessions = await sessionCollections
+          .find({
+            tutorEmail: email,
+            status: "rejected"
+          })
+          .sort({ updatedAt: -1 }) // Sort by most recently rejected first
+          .toArray();
+
+        // Log the data being sent for debugging
+        console.log(`Found ${sessions.length} rejected sessions for tutor ${email}`);
+
+        res.send(sessions);
+      } catch (error) {
+        console.error("Error fetching rejected sessions:", error);
+        res.status(500).send({
+          message: "Error fetching rejected sessions",
+          error: error.message
+        });
       }
     });
 
