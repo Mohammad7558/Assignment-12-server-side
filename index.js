@@ -9,6 +9,9 @@ app.use(cors());
 app.use(express.json());
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@my-user.d2otqer.mongodb.net/?retryWrites=true&w=majority&appName=my-user`;
 
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -31,6 +34,7 @@ async function run() {
     const bookedSessionsCollections = db.collection('booked-sessions');
     const reviewCollections = db.collection('reviews');
     const studentsCreateNotesCollections = db.collection('create-note');
+    const paymentCollections = db.collection('payments');
     // --------Db Collection end ---------//
 
 
@@ -233,6 +237,30 @@ async function run() {
 
     //----------------------payment related API start -------------------------//
 
+    app.post("/stripe/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+
+      // 🔒 Validate price
+      if (!price || price < 1) {
+        return res.status(400).send({ error: "Invalid price" });
+      }
+
+      try {
+        // 💳 Create payment intent with amount in cents
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: Math.round(price * 100),
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        console.error("Stripe error:", error);
+        res.status(500).send({ error: "Payment creation failed" });
+      }
+    });
 
     //----------------------payment related API end -------------------------//
 
@@ -241,15 +269,16 @@ async function run() {
     // In your server.js, update the booked-sessions endpoint
     app.post('/booked-sessions', async (req, res) => {
       const bookedData = req.body;
-      const { sessionId, studentEmail } = bookedData;
+      const { sessionId, studentEmail, price, paymentIntentId } = bookedData;
 
-      // Get the session details to include class dates
+      // Get the session details
       const session = await sessionCollections.findOne({ _id: new ObjectId(sessionId) });
 
       if (!session) {
         return res.status(404).send({ message: "Session not found" });
       }
 
+      // Check if session is already booked by this user
       const alreadyBooked = await bookedSessionsCollections.findOne({
         sessionId,
         studentEmail,
@@ -259,12 +288,41 @@ async function run() {
         return res.status(409).send({ message: "Session already booked by this user" });
       }
 
+      // For paid sessions, verify payment
+      if (session.sessionType === 'paid' && price > 0) {
+        if (!paymentIntentId) {
+          return res.status(400).send({ message: "Payment verification required for paid sessions" });
+        }
+
+        // Verify payment with Stripe
+        try {
+          const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+          if (paymentIntent.status !== 'succeeded') {
+            return res.status(402).send({ message: "Payment not completed" });
+          }
+
+          // Save payment record
+          await paymentCollections.insertOne({
+            sessionId,
+            studentEmail,
+            amount: price,
+            paymentIntentId,
+            paymentDate: new Date(),
+            status: 'completed'
+          });
+        } catch (error) {
+          console.error("Payment verification failed:", error);
+          return res.status(500).send({ message: "Payment verification failed" });
+        }
+      }
+
       // Include class dates from the session
       const completeBookedData = {
         ...bookedData,
         classStartDate: session.classStartDate,
         classEndDate: session.classEndDate,
-        duration: session.duration
+        duration: session.duration,
+        paymentStatus: session.sessionType === 'paid' ? 'paid' : 'free'
       };
 
       const result = await bookedSessionsCollections.insertOne(completeBookedData);
