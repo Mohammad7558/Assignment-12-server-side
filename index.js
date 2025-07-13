@@ -620,10 +620,6 @@ async function run() {
       }
     });
 
-
-
-    //// |
-
     app.patch('/admin/sessions/:id/reject', async (req, res) => {
       const { id } = req.params;
       const { rejectionReason, feedback } = req.body;
@@ -808,6 +804,48 @@ async function run() {
     });
 
     //----------------------Admin related API END --------------------------//
+
+
+    // get All tutor
+    app.get('/all-tutor', async (req, res) => {
+      const result = await userCollections.find({ role: 'tutor' }).toArray();
+      res.send(result)
+    })
+
+    app.get('/tutor/:id', async (req, res) => {
+      const id = req.params.id;
+      try {
+        const tutor = await userCollections.findOne({ _id: new ObjectId(id), role: 'tutor' });
+        if (!tutor) {
+          return res.status(404).send({ message: 'Tutor not found' });
+        }
+        res.send(tutor);
+      } catch (err) {
+        res.status(500).send({ message: 'Invalid ID format' });
+      }
+    });
+
+    // Get sessions by tutor ID
+    app.get('/tutor-sessions/:id', async (req, res) => {
+      const id = req.params.id;
+      try {
+        // First get the tutor's email
+        const tutor = await userCollections.findOne({ _id: new ObjectId(id) });
+        if (!tutor) {
+          return res.status(404).send({ message: 'Tutor not found' });
+        }
+
+        // Then get sessions by email
+        const sessions = await sessionCollections.find({
+          tutorEmail: tutor.email,
+          status: 'approved'
+        }).toArray();
+
+        res.send(sessions);
+      } catch (err) {
+        res.status(500).send({ message: 'Server error' });
+      }
+    });
 
 
     // Send a ping to confirm a successful connection
