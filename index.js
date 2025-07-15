@@ -1,3 +1,4 @@
+// ================ IMPORTS & CONFIGURATION ================
 const express = require('express');
 const app = express();
 const cors = require('cors');
@@ -5,14 +6,26 @@ const dotenv = require('dotenv');
 dotenv.config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 5000;
-app.use(cors());
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+
+// Middleware
+app.use(cors({
+  origin: ['http://localhost:5173'],
+  credentials: true,
+}));
+
 app.use(express.json());
+app.use(cookieParser());
+
+// MongoDB Atlas connection URI
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@my-user.d2otqer.mongodb.net/?retryWrites=true&w=majority&appName=my-user`;
 
 
+// Stripe payment integration
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+// MongoDB Client Configuration
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -21,12 +34,13 @@ const client = new MongoClient(uri, {
   }
 });
 
+// ================ DATABASE OPERATIONS ================
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+    // Connect to MongoDB
     await client.connect();
 
-    // --------Db Collection start ---------//
+    // ===== DATABASE COLLECTIONS =====
     const db = client.db('Study-DB');
     const userCollections = db.collection('users');
     const sessionCollections = db.collection('sessions');
@@ -35,12 +49,91 @@ async function run() {
     const reviewCollections = db.collection('reviews');
     const studentsCreateNotesCollections = db.collection('create-note');
     const paymentCollections = db.collection('payments');
-    // --------Db Collection end ---------//
 
 
-    //----------------------User related API start-------------------------//
+    // ================ API ROUTES ================
 
-    //------- upload user Data in Db -------//
+    // server.js or jwtRoutes.js
+
+    app.post('/jwt', async (req, res) => {
+      const { email } = req.body;
+      try {
+        const user = await userCollections.findOne({ email });
+        if (!user) {
+          return res.status(404).send({ message: 'User not found' });
+        }
+
+        const token = jwt.sign(
+          {
+            email: user.email,
+            role: user.role
+          },
+          process.env.ACCESS_TOKEN_SECRET,
+          { expiresIn: '2h' }
+        );
+        res.cookie('token', token, {
+          httpOnly: true,
+          secure: false, // Production এ true হবে
+          sameSite: 'strict'
+        });
+
+        res.send({ success: true });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
+
+    const verifyToken = async (req, res, next) => {
+      const token = req.cookies?.token;
+      if (!token) {
+        return res.status(401).send({ message: 'Unauthorized access' });
+      }
+
+      try {
+        // Verify token
+        const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+
+        // Get user from database
+        const user = await userCollections.findOne({ email: decoded.email });
+        if (!user) {
+          return res.status(401).send({ message: 'User not found' });
+        }
+
+        // Attach user to request
+        req.user = user;
+        next();
+      } catch (err) {
+        return res.status(401).send({ message: 'Invalid or expired token' });
+      }
+    };
+
+    // Role verification middlewares
+    const verifyAdmin = (req, res, next) => {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).send({ message: 'Forbidden: Admin access required' });
+      }
+      next();
+    };
+
+    const verifyTutor = (req, res, next) => {
+      if (req.user?.role !== 'tutor') {
+        return res.status(403).send({ message: 'Forbidden: Tutor access required' });
+      }
+      next();
+    };
+
+    const verifyStudent = (req, res, next) => {
+      if (req.user?.role !== 'student') {
+        return res.status(403).send({ message: 'Forbidden: Student access required' });
+      }
+      next();
+    };
+
+
+
+    // ################ USER RELATED APIs ################
+    // ----- User Registration -----
     app.post('/users', async (req, res) => {
       const email = req.body.email;
       const existingUser = await userCollections.findOne({ email });
@@ -50,10 +143,10 @@ async function run() {
       const user = req.body;
       const result = await userCollections.insertOne(user);
       res.send(result);
-    })
+    });
 
-    //------- GET ROLE user Data in Db -------//
-    app.get('/users/:email/role', async (req, res) => {
+    // ----- Get User Role -----
+    app.get('/users/:email/role', verifyToken, async (req, res) => {
       const email = req.params.email;
       if (!email) {
         return res.status(400).send({ message: 'Email is required' })
@@ -63,27 +156,23 @@ async function run() {
         return res.status(404).send({ message: 'User Not Found' })
       }
       res.send({ role: user.role || 'student' })
-    })
+    });
 
-    //-------- get all session ----------//
+    // ----- Get All Sessions (Public) -----
     app.get('/sessions', async (req, res) => {
       const result = await sessionCollections.find().toArray();
       res.send(result)
-    })
+    });
 
-    //----------------------User related API end -------------------------//
-
-
-    //----------------------Tutor related API start -------------------------//
-
-    // ---------- add session API ----------//
+    // ################ TUTOR RELATED APIs ################
+    // ----- Create New Session -----
     app.post('/session', async (req, res) => {
       const session = req.body;
       const result = await sessionCollections.insertOne(session);
       res.send(result);
-    })
+    });
 
-    // ---------- get 6 card session API ----------//
+    // ----- Get Approved Sessions (Limited for Homepage) -----
     app.get('/approved', async (req, res) => {
       const now = new Date();
       const result = await sessionCollections
@@ -94,8 +183,7 @@ async function run() {
       res.send(result);
     });
 
-
-    // ---------- show card details session API ----------//
+    // ----- Get Session Details by ID -----
     app.get('/session/:id', async (req, res) => {
       const id = req.params.id;
       try {
@@ -109,7 +197,7 @@ async function run() {
       }
     });
 
-    // get sessions data by email //
+    // ----- Get Sessions by Tutor Email -----
     app.get('/current-user', async (req, res) => {
       const email = req.query.email;
       if (!email) {
@@ -124,7 +212,7 @@ async function run() {
       }
     });
 
-    // req again API//
+    // ----- Request Session Approval Again -----
     app.patch('/sessions/request-again/:id', async (req, res) => {
       const sessionId = req.params.id;
       if (!ObjectId.isValid(sessionId)) {
@@ -154,14 +242,14 @@ async function run() {
       }
     });
 
-    // upload materials
+    // ----- Upload Study Materials -----
     app.post('/materials', async (req, res) => {
       const material = req.body;
       const result = await materialsCollections.insertOne(material);
       res.send(result);
     });
 
-    // tutor approved sessions by email
+    // ----- Get Approved Sessions by Tutor -----
     app.get("/tutor-approved-sessions", async (req, res) => {
       const email = req.query.email;
       if (!email) return res.status(400).send({ error: "Email is required" });
@@ -173,8 +261,7 @@ async function run() {
       res.send(sessions);
     });
 
-    // get all materials uploaded by a tutor 
-    // Updated GET /materials endpoint
+    // ----- Get Materials (Filter by Session or Tutor) -----
     app.get('/materials', async (req, res) => {
       const { sessionId, email } = req.query;
 
@@ -194,7 +281,7 @@ async function run() {
       }
     });
 
-    // UPDATE a material by ID
+    // ----- Update Material -----
     app.patch('/materials/:id', async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
@@ -214,8 +301,7 @@ async function run() {
       }
     });
 
-
-    // DELETE a material by ID
+    // ----- Delete Material -----
     app.delete('/materials/:id', async (req, res) => {
       const id = req.params.id;
       if (!ObjectId.isValid(id)) return res.status(400).send({ error: "Invalid ID" });
@@ -231,22 +317,19 @@ async function run() {
         res.status(500).send({ error: "Failed to delete material" });
       }
     });
-    //----------------------Tutor related API end -------------------------//
 
-
-
-    //----------------------payment related API start -------------------------//
-
+    // ################ PAYMENT RELATED APIs ################
+    // ----- Create Stripe Payment Intent -----
     app.post("/stripe/create-payment-intent", async (req, res) => {
       const { price } = req.body;
 
-      // 🔒 Validate price
+      // Validate price
       if (!price || price < 1) {
         return res.status(400).send({ error: "Invalid price" });
       }
 
       try {
-        // 💳 Create payment intent with amount in cents
+        // Create payment intent (amount in cents)
         const paymentIntent = await stripe.paymentIntents.create({
           amount: Math.round(price * 100),
           currency: "usd",
@@ -262,23 +345,20 @@ async function run() {
       }
     });
 
-    //----------------------payment related API end -------------------------//
-
-
-    //----------------------booked session related API start -------------------------//
-    // In your server.js, update the booked-sessions endpoint
+    // ################ BOOKED SESSIONS APIs ################
+    // ----- Book a Session -----
     app.post('/booked-sessions', async (req, res) => {
       const bookedData = req.body;
       const { sessionId, studentEmail, price, paymentIntentId } = bookedData;
 
-      // Get the session details
+      // Get session details
       const session = await sessionCollections.findOne({ _id: new ObjectId(sessionId) });
 
       if (!session) {
         return res.status(404).send({ message: "Session not found" });
       }
 
-      // Check if session is already booked by this user
+      // Check if already booked
       const alreadyBooked = await bookedSessionsCollections.findOne({
         sessionId,
         studentEmail,
@@ -288,20 +368,20 @@ async function run() {
         return res.status(409).send({ message: "Session already booked by this user" });
       }
 
-      // For paid sessions, verify payment
+      // Handle paid sessions
       if (session.sessionType === 'paid' && price > 0) {
         if (!paymentIntentId) {
           return res.status(400).send({ message: "Payment verification required for paid sessions" });
         }
 
-        // Verify payment with Stripe
+        // Verify Stripe payment
         try {
           const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
           if (paymentIntent.status !== 'succeeded') {
             return res.status(402).send({ message: "Payment not completed" });
           }
 
-          // Save payment record
+          // Record payment
           await paymentCollections.insertOne({
             sessionId,
             studentEmail,
@@ -316,7 +396,7 @@ async function run() {
         }
       }
 
-      // Include class dates from the session
+      // Complete booking
       const completeBookedData = {
         ...bookedData,
         classStartDate: session.classStartDate,
@@ -329,8 +409,7 @@ async function run() {
       res.send(result);
     });
 
-
-    // ✅ GET /booked-sessions/check
+    // ----- Check if Session is Booked -----
     app.get('/booked-sessions/check', async (req, res) => {
       const { sessionId, email } = req.query;
       const exists = await bookedSessionsCollections.findOne({
@@ -340,11 +419,11 @@ async function run() {
       res.send({ booked: !!exists });
     });
 
-    // review Session 
+    // ----- Submit Review -----
     app.post('/reviews', async (req, res) => {
       const review = req.body;
 
-      // Check if user already has a review for this session
+      // Check for existing review
       const existingReview = await reviewCollections.findOne({
         sessionId: review.sessionId,
         studentEmail: review.studentEmail
@@ -367,6 +446,7 @@ async function run() {
       });
     });
 
+    // ----- Get Reviews for Session -----
     app.get('/reviews', async (req, res) => {
       const sessionId = req.query.sessionId;
       if (!sessionId) {
@@ -377,6 +457,7 @@ async function run() {
       res.send(reviews);
     });
 
+    // ----- Update Review -----
     app.patch('/reviews/:id', async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
@@ -402,8 +483,7 @@ async function run() {
       });
     });
 
-
-    // get student booked all sessions
+    // ----- Get Booked Session by ID -----
     app.get('/booked-sessions/:id', async (req, res) => {
       try {
         const id = req.params.id;
@@ -422,7 +502,7 @@ async function run() {
       }
     });
 
-    // Get all booked sessions for a student
+    // ----- Get All Booked Sessions for Student -----
     app.get('/booked-sessions', async (req, res) => {
       try {
         const email = req.query.email;
@@ -438,15 +518,15 @@ async function run() {
       }
     });
 
-    //----------------------booked session related API end -------------------------//
-
-    //----------------------student related API Start STAR --------------------------//
+    // ################ STUDENT RELATED APIs ################
+    // ----- Create Study Notes -----
     app.post('/create-notes', async (req, res) => {
       const notes = req.body;
       const result = await studentsCreateNotesCollections.insertOne(notes);
       res.send(result)
-    })
+    });
 
+    // ----- Get Notes by Student Email -----
     app.get('/notes', async (req, res) => {
       try {
         const email = req.query.email;
@@ -462,7 +542,7 @@ async function run() {
       }
     });
 
-    // Update a note
+    // ----- Update Note -----
     app.patch('/notes/:id', async (req, res) => {
       try {
         const id = req.params.id;
@@ -489,7 +569,7 @@ async function run() {
       }
     });
 
-    // Delete a note
+    // ----- Delete Note -----
     app.delete('/notes/:id', async (req, res) => {
       try {
         const id = req.params.id;
@@ -510,21 +590,14 @@ async function run() {
       }
     });
 
-    // view materials for student they booked sessions
-
-    //----------------------student related API END --------------------------//
-
-
-
-
-    //----------------------Admin related API Start END --------------------------//
-
-    // get all users
-    app.get('/all-users', async (req, res) => {
+    // ################ ADMIN RELATED APIs ################
+    // ----- Get All Users -----
+    app.get('/all-users', verifyToken, verifyAdmin,  async (req, res) => {
       const result = await userCollections.find().toArray();
       res.send(result)
-    })
+    });
 
+    // ----- Search Users -----
     app.get('/search-users', async (req, res) => {
       const { query } = req.query;
 
@@ -542,21 +615,18 @@ async function run() {
       }
     });
 
-    // Update user role
-    // Update this endpoint in your backend (server.js)
+    // ----- Update User Role -----
     app.patch('/update-user-role/:id', async (req, res) => {
       const { id } = req.params;
-      const { role, currentUserEmail } = req.body; // Add current user email
+      const { role, currentUserEmail } = req.body;
 
       if (!ObjectId.isValid(id)) {
         return res.status(400).send({ message: 'Invalid user ID' });
       }
 
       try {
-        // Get the user being updated
+        // Prevent self-role change
         const userToUpdate = await userCollections.findOne({ _id: new ObjectId(id) });
-
-        // Check if admin is trying to change their own role
         if (userToUpdate.email === currentUserEmail && role !== 'admin') {
           return res.status(403).send({
             message: 'You cannot remove your own admin privileges'
@@ -578,8 +648,8 @@ async function run() {
       }
     });
 
-
-    app.get('/admin/sessions', async (req, res) => {
+    // ----- Get All Sessions (Admin View) -----
+    app.get('/admin/sessions', verifyToken, verifyAdmin, async (req, res) => {
       try {
         const sessions = await sessionCollections.find().toArray();
         res.send(sessions);
@@ -588,6 +658,7 @@ async function run() {
       }
     });
 
+    // ----- Approve Session (Admin) -----
     app.patch('/admin/sessions/:id/approve', async (req, res) => {
       const { id } = req.params;
       const { sessionType, price } = req.body;
@@ -620,6 +691,7 @@ async function run() {
       }
     });
 
+    // ----- Reject Session (Admin) -----
     app.patch('/admin/sessions/:id/reject', async (req, res) => {
       const { id } = req.params;
       const { rejectionReason, feedback } = req.body;
@@ -639,7 +711,6 @@ async function run() {
           updatedAt: new Date()
         };
 
-        // Only add feedback if provided
         if (feedback) {
           updateData.feedback = feedback;
         }
@@ -664,7 +735,7 @@ async function run() {
       }
     });
 
-    // Update session
+    // ----- Update Session (Admin) -----
     app.patch('/admin/sessions/:id/update', async (req, res) => {
       const { id } = req.params;
       const updateData = req.body;
@@ -689,7 +760,7 @@ async function run() {
       }
     });
 
-    // Delete session
+    // ----- Delete Session (Admin) -----
     app.delete('/admin/sessions/:id', async (req, res) => {
       const { id } = req.params;
 
@@ -710,40 +781,8 @@ async function run() {
       }
     });
 
-    // Reject session with reason
-    app.patch('/admin/sessions/:id/reject', async (req, res) => {
-      const { id } = req.params;
-      const { rejectionReason, feedback } = req.body;
-
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).send({ message: 'Invalid session ID' });
-      }
-
-      try {
-        const result = await sessionCollections.updateOne(
-          { _id: new ObjectId(id) },
-          {
-            $set: {
-              status: 'rejected',
-              rejectionReason,
-              feedback
-            }
-          }
-        );
-
-        if (result.modifiedCount === 0) {
-          return res.status(404).send({ message: 'Session not found or no changes made' });
-        }
-
-        res.send({ success: true, message: 'Session rejected successfully' });
-      } catch (error) {
-        res.status(500).send({ message: 'Error rejecting session' });
-      }
-    });
-
-
-    // Get all materials (admin view)
-    app.get('/admin/materials', async (req, res) => {
+    // ----- Get All Materials (Admin View) -----
+    app.get('/admin/materials', verifyToken, verifyAdmin, async (req, res) => {
       try {
         const materials = await materialsCollections.find().toArray();
         res.send(materials);
@@ -752,8 +791,8 @@ async function run() {
       }
     });
 
-    // Delete material
-    app.delete('/admin/materials/:id', async (req, res) => {
+    // ----- Delete Material (Admin) ----- 
+    app.delete('/admin/materials/:id', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
 
       if (!ObjectId.isValid(id)) {
@@ -773,7 +812,7 @@ async function run() {
       }
     });
 
-    // Update the tutor-rejected-sessions endpoint
+    // ----- Get Rejected Sessions for Tutor -----
     app.get('/tutor-rejected-sessions', async (req, res) => {
       const email = req.query.email;
 
@@ -787,11 +826,8 @@ async function run() {
             tutorEmail: email,
             status: "rejected"
           })
-          .sort({ updatedAt: -1 }) // Sort by most recently rejected first
+          .sort({ updatedAt: -1 })
           .toArray();
-
-        // Log the data being sent for debugging
-        console.log(`Found ${sessions.length} rejected sessions for tutor ${email}`);
 
         res.send(sessions);
       } catch (error) {
@@ -803,15 +839,14 @@ async function run() {
       }
     });
 
-    //----------------------Admin related API END --------------------------//
-
-
-    // get All tutor
+    // ################ TUTOR PROFILE APIs ################
+    // ----- Get All Tutors -----
     app.get('/all-tutor', async (req, res) => {
       const result = await userCollections.find({ role: 'tutor' }).toArray();
       res.send(result)
-    })
+    });
 
+    // ----- Get Tutor by ID -----
     app.get('/tutor/:id', async (req, res) => {
       const id = req.params.id;
       try {
@@ -825,17 +860,17 @@ async function run() {
       }
     });
 
-    // Get sessions by tutor ID
+    // ----- Get Sessions by Tutor ID -----
     app.get('/tutor-sessions/:id', async (req, res) => {
       const id = req.params.id;
       try {
-        // First get the tutor's email
+        // Get tutor's email first
         const tutor = await userCollections.findOne({ _id: new ObjectId(id) });
         if (!tutor) {
           return res.status(404).send({ message: 'Tutor not found' });
         }
 
-        // Then get sessions by email
+        // Get approved sessions
         const sessions = await sessionCollections.find({
           tutorEmail: tutor.email,
           status: 'approved'
@@ -847,23 +882,21 @@ async function run() {
       }
     });
 
-
-    // Send a ping to confirm a successful connection
+    // ================ DATABASE HEALTH CHECK ================
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
+    // Client will remain connected (commented out close for persistent connection)
     // await client.close();
   }
 }
 run().catch(console.dir);
 
-
-
+// ================ SERVER SETUP ================
 app.get('/', (req, res) => {
   res.send('the last dance')
-})
+});
 
 app.listen(port, () => {
   console.log(`server is running on port ${port}`)
-})
+});
