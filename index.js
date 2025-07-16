@@ -69,7 +69,7 @@ async function run() {
             role: user.role
           },
           process.env.ACCESS_TOKEN_SECRET,
-          { expiresIn: '2h' }
+          { expiresIn: '7d' }
         );
         res.cookie('token', token, {
           httpOnly: true,
@@ -130,6 +130,15 @@ async function run() {
       next();
     };
 
+    // server.js / routes/authRoutes.js
+    app.post('/logout', (req, res) => {
+      res.clearCookie('token', {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'strict'
+      });
+      res.send({ message: 'Logged out successfully' });
+    });
 
 
     // ################ USER RELATED APIs ################
@@ -166,7 +175,7 @@ async function run() {
 
     // ################ TUTOR RELATED APIs ################
     // ----- Create New Session -----
-    app.post('/session', async (req, res) => {
+    app.post('/session', verifyToken, verifyTutor, async (req, res) => {
       const session = req.body;
       const result = await sessionCollections.insertOne(session);
       res.send(result);
@@ -198,7 +207,7 @@ async function run() {
     });
 
     // ----- Get Sessions by Tutor Email -----
-    app.get('/current-user', async (req, res) => {
+    app.get('/current-user', verifyToken, verifyTutor, async (req, res) => {
       const email = req.query.email;
       if (!email) {
         return res.status(400).send({ message: "Email is required in query" });
@@ -213,7 +222,7 @@ async function run() {
     });
 
     // ----- Request Session Approval Again -----
-    app.patch('/sessions/request-again/:id', async (req, res) => {
+    app.patch('/sessions/request-again/:id', verifyToken, verifyTutor, async (req, res) => {
       const sessionId = req.params.id;
       if (!ObjectId.isValid(sessionId)) {
         return res.status(400).send({ error: 'Invalid session ID' });
@@ -243,14 +252,14 @@ async function run() {
     });
 
     // ----- Upload Study Materials -----
-    app.post('/materials', async (req, res) => {
+    app.post('/materials', verifyToken, verifyTutor, async (req, res) => {
       const material = req.body;
       const result = await materialsCollections.insertOne(material);
       res.send(result);
     });
 
     // ----- Get Approved Sessions by Tutor -----
-    app.get("/tutor-approved-sessions", async (req, res) => {
+    app.get("/tutor-approved-sessions", verifyToken, verifyTutor, async (req, res) => {
       const email = req.query.email;
       if (!email) return res.status(400).send({ error: "Email is required" });
 
@@ -262,7 +271,7 @@ async function run() {
     });
 
     // ----- Get Materials (Filter by Session or Tutor) -----
-    app.get('/materials', async (req, res) => {
+    app.get('/materials', verifyToken, async (req, res) => {
       const { sessionId, email } = req.query;
 
       if (!sessionId && !email) {
@@ -282,7 +291,7 @@ async function run() {
     });
 
     // ----- Update Material -----
-    app.patch('/materials/:id', async (req, res) => {
+    app.patch('/materials/:id', verifyToken, verifyTutor, async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
       if (!ObjectId.isValid(id)) return res.status(400).send({ error: "Invalid ID" });
@@ -302,7 +311,7 @@ async function run() {
     });
 
     // ----- Delete Material -----
-    app.delete('/materials/:id', async (req, res) => {
+    app.delete('/materials/:id', verifyToken, verifyTutor, async (req, res) => {
       const id = req.params.id;
       if (!ObjectId.isValid(id)) return res.status(400).send({ error: "Invalid ID" });
 
@@ -347,7 +356,7 @@ async function run() {
 
     // ################ BOOKED SESSIONS APIs ################
     // ----- Book a Session -----
-    app.post('/booked-sessions', async (req, res) => {
+    app.post('/booked-sessions', verifyToken, verifyStudent, async (req, res) => {
       const bookedData = req.body;
       const { sessionId, studentEmail, price, paymentIntentId } = bookedData;
 
@@ -410,7 +419,7 @@ async function run() {
     });
 
     // ----- Check if Session is Booked -----
-    app.get('/booked-sessions/check', async (req, res) => {
+    app.get('/booked-sessions/check', verifyToken, verifyStudent, async (req, res) => {
       const { sessionId, email } = req.query;
       const exists = await bookedSessionsCollections.findOne({
         sessionId,
@@ -420,7 +429,7 @@ async function run() {
     });
 
     // ----- Submit Review -----
-    app.post('/reviews', async (req, res) => {
+    app.post('/reviews', verifyToken, verifyStudent, async (req, res) => {
       const review = req.body;
 
       // Check for existing review
@@ -458,7 +467,7 @@ async function run() {
     });
 
     // ----- Update Review -----
-    app.patch('/reviews/:id', async (req, res) => {
+    app.patch('/reviews/:id', verifyToken, verifyStudent, async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
 
@@ -484,7 +493,7 @@ async function run() {
     });
 
     // ----- Get Booked Session by ID -----
-    app.get('/booked-sessions/:id', async (req, res) => {
+    app.get('/booked-sessions/:id', verifyToken, verifyStudent, async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
@@ -503,7 +512,7 @@ async function run() {
     });
 
     // ----- Get All Booked Sessions for Student -----
-    app.get('/booked-sessions', async (req, res) => {
+    app.get('/booked-sessions', verifyToken, verifyStudent, async (req, res) => {
       try {
         const email = req.query.email;
         if (!email) {
@@ -520,14 +529,14 @@ async function run() {
 
     // ################ STUDENT RELATED APIs ################
     // ----- Create Study Notes -----
-    app.post('/create-notes', async (req, res) => {
+    app.post('/create-notes', verifyToken, verifyStudent, async (req, res) => {
       const notes = req.body;
       const result = await studentsCreateNotesCollections.insertOne(notes);
       res.send(result)
     });
 
     // ----- Get Notes by Student Email -----
-    app.get('/notes', async (req, res) => {
+    app.get('/notes', verifyToken, verifyStudent, async (req, res) => {
       try {
         const email = req.query.email;
         if (!email) {
@@ -543,7 +552,7 @@ async function run() {
     });
 
     // ----- Update Note -----
-    app.patch('/notes/:id', async (req, res) => {
+    app.patch('/notes/:id', verifyToken, verifyStudent, async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
@@ -570,7 +579,7 @@ async function run() {
     });
 
     // ----- Delete Note -----
-    app.delete('/notes/:id', async (req, res) => {
+    app.delete('/notes/:id', verifyToken, verifyStudent, async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
@@ -592,13 +601,13 @@ async function run() {
 
     // ################ ADMIN RELATED APIs ################
     // ----- Get All Users -----
-    app.get('/all-users', verifyToken, verifyAdmin,  async (req, res) => {
+    app.get('/all-users', verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollections.find().toArray();
       res.send(result)
     });
 
     // ----- Search Users -----
-    app.get('/search-users', async (req, res) => {
+    app.get('/search-users', verifyToken, verifyAdmin, async (req, res) => {
       const { query } = req.query;
 
       try {
@@ -616,7 +625,7 @@ async function run() {
     });
 
     // ----- Update User Role -----
-    app.patch('/update-user-role/:id', async (req, res) => {
+    app.patch('/update-user-role/:id', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const { role, currentUserEmail } = req.body;
 
@@ -659,7 +668,7 @@ async function run() {
     });
 
     // ----- Approve Session (Admin) -----
-    app.patch('/admin/sessions/:id/approve', async (req, res) => {
+    app.patch('/admin/sessions/:id/approve', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const { sessionType, price } = req.body;
 
@@ -692,7 +701,7 @@ async function run() {
     });
 
     // ----- Reject Session (Admin) -----
-    app.patch('/admin/sessions/:id/reject', async (req, res) => {
+    app.patch('/admin/sessions/:id/reject', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const { rejectionReason, feedback } = req.body;
 
@@ -736,7 +745,7 @@ async function run() {
     });
 
     // ----- Update Session (Admin) -----
-    app.patch('/admin/sessions/:id/update', async (req, res) => {
+    app.patch('/admin/sessions/:id/update', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const updateData = req.body;
 
@@ -761,7 +770,7 @@ async function run() {
     });
 
     // ----- Delete Session (Admin) -----
-    app.delete('/admin/sessions/:id', async (req, res) => {
+    app.delete('/admin/sessions/:id', verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
 
       if (!ObjectId.isValid(id)) {
@@ -813,7 +822,7 @@ async function run() {
     });
 
     // ----- Get Rejected Sessions for Tutor -----
-    app.get('/tutor-rejected-sessions', async (req, res) => {
+    app.get('/tutor-rejected-sessions', verifyToken, verifyTutor, async (req, res) => {
       const email = req.query.email;
 
       if (!email) {
@@ -881,6 +890,24 @@ async function run() {
         res.status(500).send({ message: 'Server error' });
       }
     });
+
+    app.get('/api/session/:sessionId/bookings-count', async (req, res) => {
+      const sessionId = req.params.sessionId;
+      try {
+        const totalBookings = await bookedSessionsCollections.countDocuments({ sessionId });
+        const paidCount = await bookedSessionsCollections.countDocuments({
+          sessionId,
+          paymentStatus: 'paid'
+        });
+        res.send({
+          sessionId,
+          totalBookings,
+          paidCount
+        });
+      } catch (error) {
+        res.status(500).send({ error: "Failed to count bookings" });
+      }
+    })
 
     // ================ DATABASE HEALTH CHECK ================
     await client.db("admin").command({ ping: 1 });
