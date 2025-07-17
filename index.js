@@ -84,6 +84,13 @@ async function run() {
       }
     });
 
+    // Add this to your backend routes
+    app.get('/users/:email', async (req, res) => {
+      const email = req.params.email;
+      const user = await userCollections.findOne({ email });
+      res.send(!!user);
+    });
+
     const verifyToken = async (req, res, next) => {
       const token = req.cookies?.token;
       if (!token) {
@@ -419,7 +426,7 @@ async function run() {
     });
 
     // ----- Check if Session is Booked -----
-    app.get('/booked-sessions/check', verifyToken, verifyStudent, async (req, res) => {
+    app.get('/booked-sessions/check', verifyToken, async (req, res) => {
       const { sessionId, email } = req.query;
       const exists = await bookedSessionsCollections.findOne({
         sessionId,
