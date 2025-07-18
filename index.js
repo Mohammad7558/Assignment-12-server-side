@@ -137,6 +137,7 @@ async function run() {
       next();
     };
 
+
     // server.js / routes/authRoutes.js
     app.post('/logout', (req, res) => {
       res.clearCookie('token', {
@@ -174,11 +175,13 @@ async function run() {
       res.send({ role: user.role || 'student' })
     });
 
+
     // ----- Get All Sessions (Public) -----
     app.get('/sessions', async (req, res) => {
       const result = await sessionCollections.find().toArray();
       res.send(result)
     });
+
 
     // ################ TUTOR RELATED APIs ################
     // ----- Create New Session -----
@@ -497,6 +500,67 @@ async function run() {
         success: true,
         modifiedCount: result.modifiedCount
       });
+    });
+
+    app.delete('/reviews/:id', verifyToken, verifyStudent, async (req, res) => {
+      const id = req.params.id;
+
+      // Validate review ID format
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({
+          success: false,
+          message: "Invalid review ID format"
+        });
+      }
+
+      try {
+        // First find the review to verify ownership
+        const review = await reviewCollections.findOne({
+          _id: new ObjectId(id)
+        });
+
+        // Check if review exists
+        if (!review) {
+          return res.status(404).send({
+            success: false,
+            message: "Review not found"
+          });
+        }
+
+        // Verify the requesting user is the review author
+        if (review.studentEmail !== req.user.email) {
+          return res.status(403).send({
+            success: false,
+            message: "Unauthorized - You can only delete your own reviews"
+          });
+        }
+
+        // Delete the review
+        const result = await reviewCollections.deleteOne({
+          _id: new ObjectId(id)
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Review not found or already deleted"
+          });
+        }
+
+        res.send({
+          success: true,
+          deletedCount: result.deletedCount,
+          message: "Review deleted successfully"
+        });
+
+      } catch (error) {
+        console.error("Error deleting review:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error while deleting review",
+          error: error.message
+        });
+      }
     });
 
     // ----- Get Booked Session by ID -----
@@ -915,6 +979,100 @@ async function run() {
         res.status(500).send({ error: "Failed to count bookings" });
       }
     })
+
+    //-------------------------------------------------------------//
+
+    // Add these to your existing backend code (server.js)
+
+    // ----- Get Dashboard Stats -----
+    app.get('/admin/stats', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        console.log('Attempting to fetch admin stats...'); // Debug log
+
+        const results = await Promise.all([
+          userCollections.countDocuments(),
+          userCollections.countDocuments({ role: 'tutor' }),
+          userCollections.countDocuments({ role: 'student' }),
+          sessionCollections.countDocuments(),
+          sessionCollections.countDocuments({ status: 'approved' }),
+          sessionCollections.countDocuments({ status: 'pending' }),
+          sessionCollections.countDocuments({ status: 'rejected' }),
+          bookedSessionsCollections.countDocuments(),
+          paymentCollections.aggregate([
+            { $match: { status: 'completed' } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+          ]).toArray() // Changed to toArray()
+        ]);
+
+        console.log('Query results:', results); // Debug log
+
+        const [
+          totalUsers,
+          totalTutors,
+          totalStudents,
+          totalSessions,
+          totalApprovedSessions,
+          totalPendingSessions,
+          totalRejectedSessions,
+          totalBookings,
+          revenueResult
+        ] = results;
+
+        const totalRevenue = revenueResult[0]?.total || 0;
+
+        res.send({
+          totalUsers,
+          totalTutors,
+          totalStudents,
+          totalSessions,
+          totalApprovedSessions,
+          totalPendingSessions,
+          totalRejectedSessions,
+          totalBookings,
+          totalRevenue
+        });
+      } catch (error) {
+        console.error('Detailed stats error:', error); // Detailed error logging
+        res.status(500).send({
+          message: 'Error fetching dashboard stats',
+          error: error.message // Include error message in response
+        });
+      }
+    });
+
+    // ----- Get Recent Activities -----
+    app.get('/admin/recent-activities', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const limit = parseInt(req.query.limit) || 10;
+
+        const recentSessions = await sessionCollections.find()
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray();
+
+        const recentBookings = await bookedSessionsCollections.find()
+          .sort({ bookingDate: -1 })
+          .limit(limit)
+          .toArray();
+
+        const recentPayments = await paymentCollections.find()
+          .sort({ paymentDate: -1 })
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          recentSessions,
+          recentBookings,
+          recentPayments
+        });
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching recent activities' });
+      }
+    });
+
+
+    //---------------------------------------------------------------//
+
 
     // ================ DATABASE HEALTH CHECK ================
     await client.db("admin").command({ ping: 1 });
