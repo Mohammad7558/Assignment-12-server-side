@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 
 // Middleware
 app.use(cors({
-  origin: ['https://the-last-dance-1227f.web.app/'],
+  origin: ['https://the-last-dance-1227f.web.app'],
   credentials: true,
 }));
 
@@ -73,8 +73,8 @@ async function run() {
         );
         res.cookie('token', token, {
           httpOnly: true,
-          secure: false, // Production এ true হবে
-          sameSite: 'strict'
+          secure: true,
+          sameSite: 'none'
         });
 
         res.send({ success: true });
