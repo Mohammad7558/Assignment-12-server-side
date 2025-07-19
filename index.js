@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:5173'],
+  origin: ['https://the-last-dance-1227f.web.app/'],
   credentials: true,
 }));
 
@@ -38,7 +38,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect to MongoDB
-    await client.connect();
+    // await client.connect();
 
     // ===== DATABASE COLLECTIONS =====
     const db = client.db('Study-DB');
