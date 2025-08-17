@@ -11,7 +11,11 @@ const jwt = require('jsonwebtoken');
 
 // Middleware
 app.use(cors({
-  origin: true,  // Allows all origins
+  origin: [
+    "http://localhost:5173",   // dev local
+    "http://127.0.0.1:5173",   // alt local
+    "https://the-last-dance-1227f.web.app", // deployed frontend
+  ],
   credentials: true,
 }));
 
