@@ -11,7 +11,7 @@ const jwt = require('jsonwebtoken');
 
 // Middleware
 app.use(cors({
-  origin: ['https://the-last-dance-1227f.web.app'],
+  origin: true,  // Allows all origins
   credentials: true,
 }));
 
@@ -1067,6 +1067,378 @@ async function run() {
         });
       } catch (error) {
         res.status(500).send({ message: 'Error fetching recent activities' });
+      }
+    });
+
+
+    // ################ STUDENT DASHBOARD APIs ################
+
+    // ----- Get Student Dashboard Stats -----
+    app.get('/student/dashboard-stats', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const studentEmail = req.user.email;
+
+        // Get all booked sessions for the student
+        const bookedSessions = await bookedSessionsCollections.find({
+          studentEmail
+        }).toArray();
+
+        const bookedSessionIds = bookedSessions.map(bs => bs.sessionId);
+
+        // Get session details for booked sessions
+        const sessions = await sessionCollections.find({
+          _id: { $in: bookedSessionIds.map(id => new ObjectId(id)) }
+        }).toArray();
+
+        // Calculate stats
+        const totalBookedSessions = bookedSessions.length;
+
+        const currentDate = new Date();
+
+        // Ongoing sessions (current date is between start and end date)
+        const ongoingSessions = sessions.filter(session => {
+          const startDate = new Date(session.classStartDate);
+          const endDate = new Date(session.classEndDate);
+          return currentDate >= startDate && currentDate <= endDate;
+        });
+
+        // Completed sessions
+        const completedSessions = sessions.filter(session => {
+          const endDate = new Date(session.classEndDate);
+          return currentDate > endDate;
+        });
+
+        // Upcoming sessions
+        const upcomingSessions = sessions.filter(session => {
+          const startDate = new Date(session.classStartDate);
+          return currentDate < startDate;
+        });
+
+        // Calculate upcoming deadlines (sessions starting within 7 days)
+        const nextWeek = new Date();
+        nextWeek.setDate(nextWeek.getDate() + 7);
+
+        const upcomingDeadlines = upcomingSessions.filter(session => {
+          const startDate = new Date(session.classStartDate);
+          return startDate <= nextWeek;
+        }).length;
+
+        // Get student's notes count
+        const totalNotes = await studentsCreateNotesCollections.countDocuments({
+          email: studentEmail
+        });
+
+        // Get student's reviews count
+        const totalReviews = await reviewCollections.countDocuments({
+          studentEmail
+        });
+
+        res.send({
+          totalBookedSessions,
+          ongoingSessionsCount: ongoingSessions.length,
+          completedSessionsCount: completedSessions.length,
+          upcomingSessionsCount: upcomingSessions.length,
+          upcomingDeadlines,
+          totalNotes,
+          totalReviews
+        });
+
+      } catch (error) {
+        console.error('Error fetching student dashboard stats:', error);
+        res.status(500).send({ message: 'Error fetching dashboard stats' });
+      }
+    });
+
+    // ----- Get Student's Ongoing Sessions with Progress -----
+    app.get('/student/ongoing-sessions', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const studentEmail = req.user.email;
+        const currentDate = new Date();
+
+        // Get booked sessions
+        const bookedSessions = await bookedSessionsCollections.find({
+          studentEmail
+        }).toArray();
+
+        const bookedSessionIds = bookedSessions.map(bs => bs.sessionId);
+
+        // Get ongoing session details
+        const ongoingSessions = await sessionCollections.find({
+          _id: { $in: bookedSessionIds.map(id => new ObjectId(id)) },
+          classStartDate: { $lte: currentDate },
+          classEndDate: { $gte: currentDate }
+        }).toArray();
+
+        // Calculate progress for each session
+        const sessionsWithProgress = ongoingSessions.map(session => {
+          const startDate = new Date(session.classStartDate);
+          const endDate = new Date(session.classEndDate);
+          const totalDuration = endDate - startDate;
+          const elapsedDuration = currentDate - startDate;
+          const progress = Math.max(0, Math.min(100, Math.round((elapsedDuration / totalDuration) * 100)));
+
+          return {
+            ...session,
+            progress,
+            bookedSession: bookedSessions.find(bs => bs.sessionId === session._id.toString())
+          };
+        });
+
+        res.send(sessionsWithProgress);
+
+      } catch (error) {
+        console.error('Error fetching ongoing sessions:', error);
+        res.status(500).send({ message: 'Error fetching ongoing sessions' });
+      }
+    });
+
+    // ----- Get Upcoming Sessions/Assignments -----
+    app.get('/student/upcoming-sessions', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const studentEmail = req.user.email;
+        const currentDate = new Date();
+
+        // Get booked sessions
+        const bookedSessions = await bookedSessionsCollections.find({
+          studentEmail
+        }).toArray();
+
+        const bookedSessionIds = bookedSessions.map(bs => bs.sessionId);
+
+        // Get upcoming session details
+        const upcomingSessions = await sessionCollections.find({
+          _id: { $in: bookedSessionIds.map(id => new ObjectId(id)) },
+          classStartDate: { $gt: currentDate }
+        }).sort({ classStartDate: 1 }).limit(5).toArray();
+
+        // Add priority based on how soon they start
+        const sessionsWithPriority = upcomingSessions.map(session => {
+          const startDate = new Date(session.classStartDate);
+          const daysUntilStart = Math.ceil((startDate - currentDate) / (1000 * 60 * 60 * 24));
+
+          let priority = 'low';
+          let dueText = '';
+
+          if (daysUntilStart <= 1) {
+            priority = 'high';
+            dueText = daysUntilStart === 0 ? 'Today' : 'Tomorrow';
+          } else if (daysUntilStart <= 3) {
+            priority = 'medium';
+            dueText = `In ${daysUntilStart} days`;
+          } else {
+            priority = 'low';
+            dueText = `In ${daysUntilStart} days`;
+          }
+
+          return {
+            ...session,
+            priority,
+            dueText,
+            daysUntilStart
+          };
+        });
+
+        res.send(sessionsWithPriority);
+
+      } catch (error) {
+        console.error('Error fetching upcoming sessions:', error);
+        res.status(500).send({ message: 'Error fetching upcoming sessions' });
+      }
+    });
+
+    // ----- Get Recent Performance/Grades -----
+    app.get('/student/recent-performance', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const studentEmail = req.user.email;
+
+        // Get student's reviews (as performance indicator)
+        const reviews = await reviewCollections.find({
+          studentEmail
+        }).sort({ createdAt: -1 }).limit(10).toArray();
+
+        // Get session details for reviews
+        const sessionIds = reviews.map(review => review.sessionId);
+        const sessions = await sessionCollections.find({
+          _id: { $in: sessionIds.map(id => new ObjectId(id)) }
+        }).toArray();
+
+        // Combine reviews with session data
+        const performanceData = reviews.map(review => {
+          const session = sessions.find(s => s._id.toString() === review.sessionId);
+
+          // Convert rating to grade-like format
+          let grade = 'C';
+          if (review.rating >= 5) grade = 'A+';
+          else if (review.rating >= 4.5) grade = 'A';
+          else if (review.rating >= 4) grade = 'A-';
+          else if (review.rating >= 3.5) grade = 'B+';
+          else if (review.rating >= 3) grade = 'B';
+          else if (review.rating >= 2.5) grade = 'B-';
+          else if (review.rating >= 2) grade = 'C+';
+
+          return {
+            id: review._id,
+            sessionTitle: session?.title || 'Unknown Session',
+            tutorName: session?.tutorName || 'Unknown Tutor',
+            rating: review.rating,
+            grade,
+            feedback: review.feedback,
+            createdAt: review.createdAt
+          };
+        });
+
+        res.send(performanceData);
+
+      } catch (error) {
+        console.error('Error fetching recent performance:', error);
+        res.status(500).send({ message: 'Error fetching recent performance' });
+      }
+    });
+
+    // ----- Get Student's Recent Notes -----
+    app.get('/student/recent-notes', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const email = req.user.email;
+        const limit = parseInt(req.query.limit) || 5;
+
+        const recentNotes = await studentsCreateNotesCollections
+          .find({ email })
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray();
+
+        res.send(recentNotes);
+      } catch (error) {
+        console.error('Error fetching recent notes:', error);
+        res.status(500).send({ message: 'Error fetching recent notes' });
+      }
+    });
+
+    // ----- Get Study Materials for Student's Booked Sessions -----
+    app.get('/student/study-materials', verifyToken, verifyStudent, async (req, res) => {
+      try {
+        const studentEmail = req.user.email;
+
+        // Get booked sessions
+        const bookedSessions = await bookedSessionsCollections.find({
+          studentEmail
+        }).toArray();
+
+        const bookedSessionIds = bookedSessions.map(bs => bs.sessionId);
+
+        // Get materials for booked sessions
+        const materials = await materialsCollections.find({
+          sessionId: { $in: bookedSessionIds }
+        }).sort({ uploadDate: -1 }).limit(10).toArray();
+
+        // Get session details for materials
+        const sessionIds = [...new Set(materials.map(m => m.sessionId))];
+        const sessions = await sessionCollections.find({
+          _id: { $in: sessionIds.map(id => new ObjectId(id)) }
+        }).toArray();
+
+        // Add session info to materials
+        const materialsWithSession = materials.map(material => {
+          const session = sessions.find(s => s._id.toString() === material.sessionId);
+          return {
+            ...material,
+            sessionTitle: session?.title || 'Unknown Session'
+          };
+        });
+
+        res.send(materialsWithSession);
+
+      } catch (error) {
+        console.error('Error fetching study materials:', error);
+        res.status(500).send({ message: 'Error fetching study materials' });
+      }
+    });
+
+    // In your backend (server.js)
+    app.get('/api/tutor/stats', verifyToken, verifyTutor, async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        // Get basic counts
+        const totalStudents = await bookedSessionsCollections.distinct('studentEmail', { tutorEmail: email });
+        const activeCourses = await sessionCollections.countDocuments({
+          tutorEmail: email,
+          status: 'approved'
+        });
+
+        // Calculate hours taught
+        const sessions = await bookedSessionsCollections.find({ tutorEmail: email }).toArray();
+        const hoursTaught = sessions.reduce((sum, session) => sum + (session.duration || 0), 0);
+
+        // Calculate earnings
+        const payments = await paymentCollections.aggregate([
+          { $match: { tutorEmail: email, status: 'completed' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]).toArray();
+
+        const earnings = payments[0]?.total || 0;
+
+        // Growth calculations (simplified - would need historical data for real implementation)
+        const studentGrowth = Math.floor(Math.random() * 20) + 5;
+        const courseGrowth = Math.floor(Math.random() * 15) + 5;
+        const hoursGrowth = Math.floor(Math.random() * 25) + 10;
+        const earningsGrowth = Math.floor(Math.random() * 30) - 5; // Can be negative
+
+        res.send({
+          totalStudents: totalStudents.length,
+          activeCourses,
+          hoursTaught,
+          earnings,
+          studentGrowth,
+          courseGrowth,
+          hoursGrowth,
+          earningsGrowth
+        });
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching tutor stats' });
+      }
+    });
+
+    app.get('/api/tutor/upcoming-sessions', verifyToken, verifyTutor, async (req, res) => {
+      try {
+        const email = req.query.email;
+        const now = new Date();
+
+        const sessions = await bookedSessionsCollections.find({
+          tutorEmail: email,
+          startTime: { $gte: now }
+        })
+          .sort({ startTime: 1 })
+          .limit(5)
+          .toArray();
+
+        res.send(sessions);
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching upcoming sessions' });
+      }
+    });
+
+    app.get('/api/tutor/recent-students', verifyToken, verifyTutor, async (req, res) => {
+      try {
+        const email = req.query.email;
+
+        const students = await bookedSessionsCollections.aggregate([
+          { $match: { tutorEmail: email } },
+          { $sort: { bookingDate: -1 } },
+          {
+            $group: {
+              _id: "$studentEmail",
+              name: { $first: "$studentName" },
+              email: { $first: "$studentEmail" },
+              lastSessionDate: { $max: "$startTime" }
+            }
+          },
+          { $limit: 5 }
+        ]).toArray();
+
+        res.send(students);
+      } catch (error) {
+        res.status(500).send({ message: 'Error fetching recent students' });
       }
     });
 
